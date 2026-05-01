@@ -32,6 +32,19 @@ from litellm.utils import (
 # Adds the parent directory to the system path
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -196,6 +209,72 @@ def test_get_optional_params_image_gen_filters_empty_values():
         extra_body={},
     )
     assert optional_params == {}
+
+
+def test_gpt_image_provider_detection_covers_existing_family():
+    for image_model in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"):
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=image_model)
+
+        assert model == image_model
+        assert custom_llm_provider == "openai"
+
+
+def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
+
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(model="gpt-image-2")
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
+    assert (
+        "/v1/images/generations"
+        in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert (
+        "/v1/images/edits" in litellm.model_cost["gpt-image-2"]["supported_endpoints"]
+    )
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_pdf_input"] is True
+
+
+def test_gpt_image_2_snapshot_model_info(local_model_cost_map):
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="gpt-image-2-2026-04-21"
+    )
+
+    assert model == "gpt-image-2-2026-04-21"
+    assert custom_llm_provider == "openai"
+
+    model_info = litellm.get_model_info(model="gpt-image-2-2026-04-21")
+    assert model_info["litellm_provider"] == "openai"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["output_cost_per_image_token"] == 3e-05
+
+
+def test_azure_gpt_image_2_model_info(local_model_cost_map):
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="azure/gpt-image-2"
+    )
+
+    assert model == "gpt-image-2"
+    assert custom_llm_provider == "azure"
+
+    model_info = litellm.get_model_info(
+        model="gpt-image-2", custom_llm_provider="azure"
+    )
+    assert model_info["litellm_provider"] == "azure"
+    assert model_info["mode"] == "image_generation"
+    assert model_info["input_cost_per_token"] == 5e-06
+    assert model_info["input_cost_per_image_token"] == 8e-06
+    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_image_token"] == 3e-05
 
 
 def test_all_model_configs():
@@ -1181,7 +1260,7 @@ def test_get_model_info_shows_supports_computer_use():
     "model, custom_llm_provider",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
         ("gemini-2.5-pro", "vertex_ai"),
     ],
 )
@@ -1327,7 +1406,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
             ),
             (
@@ -1625,7 +1704,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1712,7 +1791,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1724,7 +1803,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -1862,7 +1941,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -1894,7 +1973,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -1981,7 +2060,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -1993,7 +2072,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2131,7 +2210,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
@@ -2163,7 +2242,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Bedrock Claude 3 Opus via Converse API",
             ),
@@ -2250,7 +2329,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "Staging Claude Opus",
             ),
@@ -2262,7 +2341,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
                 False,
                 "High-performance Claude deployment",
             ),
@@ -2400,7 +2479,7 @@ class TestProxyFunctionCalling:
         bedrock_models = [
             "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
             "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
         ]
 
         for model in bedrock_models:
